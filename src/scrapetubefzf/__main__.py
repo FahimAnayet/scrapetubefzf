@@ -160,6 +160,29 @@ def get_channel_info(query: str, limit: int, titles_map: Dict[str, str]) -> None
     f.close()
 
 
+def detect_previewer() -> str:
+    term = os.environ.get("TERM", "").lower()
+    term_program = os.environ.get("TERM_PROGRAM", "").lower()
+    
+    if shutil.which("ueberzug"):
+        return "ueberzug"
+    
+    if shutil.which("imgcat"):
+        if "wezterm" in term_program or "iterm" in term_program or "wezterm_pane" in os.environ:
+            return "imgcat"
+    
+    if shutil.which("kitten"):
+        if any(v in os.environ for v in ["KITTY_WINDOW_ID", "GHOSTTY_BIN_DIR", "GHOSTTY_RESOURCES_DIR"]):
+            return "kitten"
+        if "ghostty" in term or "kitty" in term or "ghostty" in term_program:
+            return "kitten"
+    
+    # Fallbacks
+    if shutil.which("chafa"): return "chafa"
+    if shutil.which("catimg"): return "catimg"
+    
+    return "text"
+
 def run_fzf(n: int) -> subprocess.CompletedProcess:
     # Check for GNU tail (-z support)
     tail_bin = shutil.which("gtail") or shutil.which("tail")
@@ -170,6 +193,7 @@ def run_fzf(n: int) -> subprocess.CompletedProcess:
 
     # Initialize ueberzug if available
     ueberzug_fifo = setup_ueberzug(CACHE_DIR)
+    preview_method = detect_previewer()
 
     # Set up environment for fzf
     fzf_env = os.environ.copy()
@@ -189,11 +213,11 @@ def run_fzf(n: int) -> subprocess.CompletedProcess:
             '--prompt=Select: ', '--info=hidden',
             '--header=Tab: multi-select | Enter: play | Alt-d: download | →: channels',
             '--with-shell', 'bash -c',
-            '--preview', f'{CLEAR_SCRIPT} && {PREVIEW_SCRIPT} {{}}',
+            '--preview', f'export PREVIEW_METHOD={preview_method}; {CLEAR_SCRIPT} && {PREVIEW_SCRIPT} {{}}',
             '--bind', 'resize:refresh-preview',
             '--bind', f'left:reload({my_tail} "{VIDEOS_FILE}")+change-header(Tab: multi-select | Enter: play | Alt-d: download | →: channels)',
             '--bind', f'right:reload({my_tail} "{CHANNELS_FILE}")+change-header(Tab: multi-select | Enter: play | Alt-d: download | ←: videos)',
-            '--bind', f'alt-d:execute(bash -c "{CLEAR_SCRIPT} && {DOWNLOAD_SCRIPT} {{+}}")+abort'],
+            '--bind', f'alt-d:execute(bash -c "export PREVIEW_METHOD={preview_method}; {CLEAR_SCRIPT} && {DOWNLOAD_SCRIPT} {{+}}")+abort'],
         text=True,
         capture_output=True,
         env=fzf_env

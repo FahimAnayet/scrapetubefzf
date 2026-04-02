@@ -167,10 +167,6 @@ def detect_previewer() -> str:
     if shutil.which("ueberzug"):
         return "ueberzug"
     
-    if shutil.which("imgcat"):
-        if "wezterm" in term_program or "iterm" in term_program or "wezterm_pane" in os.environ:
-            return "imgcat"
-    
     if shutil.which("kitten"):
         if any(v in os.environ for v in ["KITTY_WINDOW_ID", "GHOSTTY_BIN_DIR", "GHOSTTY_RESOURCES_DIR"]):
             return "kitten"

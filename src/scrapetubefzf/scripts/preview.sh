@@ -43,9 +43,6 @@ if [ -f "$THUMB_PATH" ]; then
                 echo '{"action": "add", "identifier": "fzf", "x": '$FZF_PREVIEW_LEFT', "y": '$FZF_PREVIEW_TOP', "max_width": '$FZF_PREVIEW_COLUMNS', "max_height": '$FZF_PREVIEW_LINES', "path": "'$THUMB_PATH'"}' >> "$UEBERZUG_FIFO"
             fi
             ;;
-        "imgcat")
-            imgcat --width "$FZF_PREVIEW_COLUMNS" --height "$FZF_PREVIEW_LINES" "$THUMB_PATH"
-            ;;
         "kitten")
             # This is what Ghostty and Kitty will use
             kitten icat --clear --stdin=no --transfer-mode=memory \

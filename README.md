@@ -52,9 +52,13 @@ options:
   - [ueberzugpp](https://github.com/jstkdng/ueberzugpp) (recommended, esp. on
     X11)
   - [kitty](https://github.com/kovidgoyal/kitty) (works within `kitty` and all kitty supported terminals employing `kitten`)
-  - imgcat (works in `iTerm2` & `WezTerm`)
+  > if you have kitty supported terminals but kitty 
+  > first you need to download kitty and move kitten 
+  > to `/usr/bin` or `/usr/local/bin` dir to make it standalone.
+  - [imgcat](https://iterm2.com/utilities/imgcat) (works in `iTerm2` & `WezTerm`)
   - [chafa](https://hpjansson.org/chafa/)
   - [catimg](https://github.com/posva/catimg)
 
   > ### TODO:
   > After playback keep the script alive.
+  > Add support for VLC, iina

@@ -206,17 +206,19 @@ def run_fzf(n: int) -> subprocess.CompletedProcess:
 
     # FIX: We wrap the commands that use '&&' inside 'bash -c' 
     # This ensures that even if Other Shell is your default shell(I'm using Nushell), 
+    # Inside run_fzf function
     fzf_result = subprocess.run(
         ['fzf', '--multi', '--reverse',
             '--read0', '--gap', '--ansi',
-            '--delimiter', '\t', '--with-nth=2',  # Skip ID in display
+            '--delimiter', '\t', '--with-nth=2',
             '--prompt=Select: ', '--info=hidden',
-            '--header=Tab: multi-select | Enter: play | Alt-d: download | →: channels',
+             '--header=Enter: Play | Tab: Add playlist | Ctrl-S: New Search | Alt-D: Download',
             '--with-shell', 'bash -c',
             '--preview', f'export PREVIEW_METHOD={preview_method}; {CLEAR_SCRIPT} && {PREVIEW_SCRIPT} {{}}',
             '--bind', 'resize:refresh-preview',
-            '--bind', f'left:reload({my_tail} "{VIDEOS_FILE}")+change-header(Tab: multi-select | Enter: play | Alt-d: download | →: channels)',
-            '--bind', f'right:reload({my_tail} "{CHANNELS_FILE}")+change-header(Tab: multi-select | Enter: play | Alt-d: download | ←: videos)',
+            '--bind', 'ctrl-s:become(exit 10)', 
+            '--bind', f'left:reload({my_tail} "{VIDEOS_FILE}")',
+            '--bind', f'right:reload({my_tail} "{CHANNELS_FILE}")',
             '--bind', f'alt-d:execute(bash -c "export PREVIEW_METHOD={preview_method}; {CLEAR_SCRIPT} && {DOWNLOAD_SCRIPT} {{+}}")+abort'],
         text=True,
         capture_output=True,
@@ -230,118 +232,86 @@ def run_fzf(n: int) -> subprocess.CompletedProcess:
     return fzf_result
 
 def main():
-    """Main function of scrapetubefzf."""
-    # Parse arguments
-    parser = argparse.ArgumentParser(
-        description=(
-            "Search YouTube from the terminal, choose videos using fzf (with thumbnail previews), "
-            "and play with mpv or download with yt-dlp."
-        )
-    )
-    parser.add_argument('-n', type=int, default=20, help='number of search results to fetch (default: 20)')
-    parser.add_argument('-d', action='store_true', help='run mpv in detached mode (terminal can close)')
+    parser = argparse.ArgumentParser(description="YouTube fzf search")
+    parser.add_argument('-n', type=int, default=20, help='results count')
+    parser.add_argument('-d', action='store_true', help='detached mode')
     parser.add_argument('query', nargs='*', help='search query')
     args = parser.parse_args()
 
-    # Validate number of results
-    if args.n <= 0:
-        print("Error: -n must be a positive integer.")
-        sys.exit(1)
-
-    # Ensure required commands exist
-    for cmd, url in {
-        'fzf':'https://github.com/junegunn/fzf#installation',
-        'yt-dlp':'https://github.com/yt-dlp/yt-dlp/wiki/Installation',
-        'mpv':'https://mpv.io/installation/'
-    }.items():
-        if not shutil.which(cmd):
-            print(f"Error: {cmd} not found. Installation: {url}")
-            sys.exit(1)
-
+    # Initial Query
     if args.query:
         query = " ".join(args.query).strip()
     else:
         try:
             query = input("Search: ").strip()
         except KeyboardInterrupt:
-            print("\nExiting...")
-            sys.exit(0)
-            
-    if not query:
-        print("Search query empty.")
-        sys.exit(1)
+            return
 
-    # Search YouTube (download result info and thumbnails in the background)
-    titles_map = {}
-    thread_v = threading.Thread(target=get_video_info, args=(query, args.n, titles_map), daemon=True)
-    thread_c = threading.Thread(target=get_channel_info, args=(query, args.n, titles_map), daemon=True)
-    thread_v.start()
-    thread_c.start()
-
-    # Main interaction loop
     while True:
-        fzf_result = run_fzf(args.n)
+        if not query: break
 
-        # Handle exit cases
-        if fzf_result.returncode != 0:
-            # 130 is the standard exit code for ESC or Ctrl-C in fzf
+        # Clear files for new search
+        for f in [VIDEOS_FILE, CHANNELS_FILE]:
+            if os.path.exists(f): os.remove(f)
+            Path(f).touch()
+
+        titles_map = {}
+        threading.Thread(target=get_video_info, args=(query, args.n, titles_map), daemon=True).start()
+        threading.Thread(target=get_channel_info, args=(query, args.n, titles_map), daemon=True).start()
+
+        # Selection Loop
+        while True:
+            fzf_result = run_fzf(args.n)
+
+            # Case: NEW SEARCH (Ctrl-S triggered exit 10)
+            if fzf_result.returncode == 10:
+                try:
+                    new_query = input("\nNew Search: ").strip()
+                    if new_query:
+                        query = new_query
+                        break # Break Selection Loop to restart Search Loop
+                    continue 
+                except KeyboardInterrupt:
+                    return
+
+            # Case: EXIT (ESC/Ctrl-C)
             if fzf_result.returncode == 130:
                 print("\nExiting...")
+                return
+
+            # Case: Selection Made (Returncode 0)
+            if fzf_result.returncode == 0:
+                fzf_lines = fzf_result.stdout.strip().split('\n')
+                selections = [line.split('\t')[0] for i, line in enumerate(fzf_lines) if i % 2 == 0]
+
+                if not selections or selections[0] == '':
+                    continue
+
+                # Build Playlist
+                playlist_content = "#EXTM3U\n"
+                for rid in selections:
+                    title = titles_map.get(rid, "Unknown")
+                    url = f"https://www.youtube.com/watch?v={rid}" if len(rid) == 11 else f"https://www.youtube.com/channel/{rid}"
+                    playlist_content += f"#EXTINF:-1,{title}\n{url}\n"
+
+                with tempfile.NamedTemporaryFile('w', delete=False, suffix=".m3u", dir=str(CACHE_DIR)) as f:
+                    f.write(playlist_content)
+                    playlist_path = f.name
+
+                if args.d:
+                    subprocess.Popen(['mpv', '--no-terminal', f'--playlist={playlist_path}'],
+                                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL, start_new_session=True)
+                else:
+                    print(f"Playing... (Close mpv to return to list)")
+                    subprocess.run(['mpv', f'--playlist={playlist_path}'])
+            else:
+                # Handle potential Alt-D or other exits
+                alt_d_file = Path(CACHE_DIR) / f"alt-d.{os.getpid()}"
+                if alt_d_file.exists():
+                    alt_d_file.unlink()
+                    continue
                 break
-            
-            # Check if we were just downloading (Alt-D)
-            alt_d_file = Path(CACHE_DIR) / f"alt-d.{os.getpid()}"
-            if alt_d_file.exists():
-                alt_d_file.unlink()
-                continue  # Return to list
-            
-            # Real error
-            if fzf_result.stderr:
-                print(f"FZF Error: {fzf_result.stderr.strip()}")
-            break
-
-        fzf_lines = fzf_result.stdout.strip().split('\n')
-        # Filter for IDs (every second line due to the way scrapetube-fzf formats output)
-        selections = [line.split('\t')[0] for i, line in enumerate(fzf_lines) if i % 2 == 0]
-
-        if not selections or selections[0] == '':
-            continue
-
-        # Build playlist and summary string
-        playlist_content = "#EXTM3U\n"
-        selections_str = ""
-        for result_id in selections:
-            title = titles_map.get(result_id, "Unknown Title")
-            selections_str += f"- {title}\n"
-            if len(result_id) == 11:  # video
-                playlist_content += f"#EXTINF:-1,{title}\nhttps://www.youtube.com/watch?v={result_id}\n"
-            else:  # channel
-                playlist_content += f"#EXTINF:-1,{title}\nhttps://www.youtube.com/channel/{result_id}\n"
-
-        # Write temp playlist
-        with tempfile.NamedTemporaryFile('w', delete=False, suffix=".m3u", dir=str(CACHE_DIR)) as f:
-            f.write(playlist_content)
-            playlist_path = f.name
-
-        if args.d:
-            # Detached mode
-            try:
-                subprocess.run(["notify-send", "scrapetubefzf (Playing):", selections_str], 
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except FileNotFoundError:
-                pass
-            
-            subprocess.Popen(
-                ['mpv', '--no-terminal', f'--playlist={playlist_path}'],
-                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL, start_new_session=True
-            )
-            # Immediately return to the list
-        else:
-            # Block and play
-            print(f"Launching mpv... (Close mpv to return to list)")
-            subprocess.run(['mpv', f'--playlist={playlist_path}'])
-            # Once mpv exits, the loop restarts and run_fzf is called again
 
 if __name__ == "__main__":
     main()

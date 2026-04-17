@@ -265,7 +265,8 @@ def main():
             query = input("Search: ").strip()
         except KeyboardInterrupt:
             print("\nExiting...")
-            sys.exit(1)
+            sys.exit(0)
+            
     if not query:
         print("Search query empty.")
         sys.exit(1)
@@ -277,71 +278,70 @@ def main():
     thread_v.start()
     thread_c.start()
 
-    fzf_result = run_fzf(args.n)
+    # Main interaction loop
+    while True:
+        fzf_result = run_fzf(args.n)
 
-    if fzf_result.returncode == 0:
+        # Handle exit cases
+        if fzf_result.returncode != 0:
+            # 130 is the standard exit code for ESC or Ctrl-C in fzf
+            if fzf_result.returncode == 130:
+                print("\nExiting...")
+                break
+            
+            # Check if we were just downloading (Alt-D)
+            alt_d_file = Path(CACHE_DIR) / f"alt-d.{os.getpid()}"
+            if alt_d_file.exists():
+                alt_d_file.unlink()
+                continue  # Return to list
+            
+            # Real error
+            if fzf_result.stderr:
+                print(f"FZF Error: {fzf_result.stderr.strip()}")
+            break
+
         fzf_lines = fzf_result.stdout.strip().split('\n')
+        # Filter for IDs (every second line due to the way scrapetube-fzf formats output)
         selections = [line.split('\t')[0] for i, line in enumerate(fzf_lines) if i % 2 == 0]
 
         if not selections or selections[0] == '':
-            print("No selection made.")
-            sys.exit(1)
+            continue
 
-        # Display selections
-        selections_str = ""
-        print(f"Selected {len(selections)} result{'s' if len(selections) != 1 else ''}:")
-        if len(selections) == 1:
-            print(f"    {titles_map[selections[0]]}")
-            selections_str += f"{titles_map[selections[0]]}"
-        else:
-            for i, result_id in enumerate(selections, 1):
-                print(f"{i:>4d}. {titles_map[result_id]}")
-                selections_str += f"{i:>4d}. {titles_map[result_id]}\n"
-
-        # Create an M3U playlist with titles (in order to preload titles in mpv)
+        # Build playlist and summary string
         playlist_content = "#EXTM3U\n"
+        selections_str = ""
         for result_id in selections:
+            title = titles_map.get(result_id, "Unknown Title")
+            selections_str += f"- {title}\n"
             if len(result_id) == 11:  # video
-                playlist_content += f"#EXTINF:-1,{titles_map[result_id]}\nhttps://www.youtube.com/watch?v={result_id}\n"
+                playlist_content += f"#EXTINF:-1,{title}\nhttps://www.youtube.com/watch?v={result_id}\n"
             else:  # channel
-                playlist_content += f"#EXTINF:-1,{titles_map[result_id]}\nhttps://www.youtube.com/channel/{result_id}\n"
+                playlist_content += f"#EXTINF:-1,{title}\nhttps://www.youtube.com/channel/{result_id}\n"
 
-        # Write to a playlist file inside the cache directory
+        # Write temp playlist
         with tempfile.NamedTemporaryFile('w', delete=False, suffix=".m3u", dir=str(CACHE_DIR)) as f:
             f.write(playlist_content)
             playlist_path = f.name
 
         if args.d:
-            # Send notification with notify-send (if available)
+            # Detached mode
             try:
-                subprocess.run(
-                    ["notify-send", "scrapetubefzf (Playing):", selections_str],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
-                )
+                subprocess.run(["notify-send", "scrapetubefzf (Playing):", selections_str], 
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except FileNotFoundError:
                 pass
-            # Run mpv detached - terminal can close
+            
             subprocess.Popen(
                 ['mpv', '--no-terminal', f'--playlist={playlist_path}'],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, start_new_session=True
             )
+            # Immediately return to the list
         else:
-            # Run mpv normally - terminal waits
-            print(f"Launching mpv with {len(selections)} selection{'s' if len(selections) != 1 else ''}...")
+            # Block and play
+            print(f"Launching mpv... (Close mpv to return to list)")
             subprocess.run(['mpv', f'--playlist={playlist_path}'])
-    elif os.path.exists(f"{CACHE_DIR}/alt-d.{os.getpid()}"):  # Alt-D
-        os.remove(f"{CACHE_DIR}/alt-d.{os.getpid()}")
-    elif fzf_result.returncode == 130:  # ESC or Ctrl-C
-        print("No selection made.")
-    else:
-        if fzf_result.stderr:
-            print(f"{fzf_result.stderr.strip()}")
-        sys.exit(1)
-
+            # Once mpv exits, the loop restarts and run_fzf is called again
 
 if __name__ == "__main__":
     main()
